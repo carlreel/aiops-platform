@@ -98,6 +98,9 @@ services:
       - "9100:9100"
 
   cadvisor:
+    # 默认不启动：镜像在 gcr.io，国内不可达。
+    # 需要容器级指标时显式启用：docker compose --profile monitor-full up -d cadvisor
+    profiles: ["monitor-full"]
     image: gcr.io/cadvisor/cadvisor:v0.49.1
     container_name: aiops-cadvisor
     restart: always

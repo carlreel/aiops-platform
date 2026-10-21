@@ -25,6 +25,10 @@ scrape_configs:
       - targets: ["node-exporter:9100"]
 
   # 容器：CPU / 内存 / 重启次数
-  - job_name: cadvisor
-    static_configs:
-      - targets: ["cadvisor:8080"]
+  # 2026-10-21 暂时关闭：cadvisor 官方镜像在 gcr.io，国内拉不到，
+  # 且 registry-mirrors 只加速 Docker Hub、不加速 gcr.io。
+  # 启用方式见 docs/部署实录-2026-10-20.md 第七节（换 Docker Hub 等价镜像后再放开）。
+  # - job_name: cadvisor
+  #   static_configs:
+  #     - targets: ["cadvisor:8080"]
+
