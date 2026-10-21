@@ -1,0 +1,30 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    env: dev
+    owner: liangchaoyang
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # 业务服务：QPS / 延迟 / 召回数 / 上游耗时
+  - job_name: rag-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["rag-api:8000"]
+
+  # 主机：CPU / 内存 / 磁盘 / 网络
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+  # 容器：CPU / 内存 / 重启次数
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]

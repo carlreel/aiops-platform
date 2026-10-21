@@ -1,0 +1,62 @@
+groups:
+  - name: aiops-platform
+    rules:
+      # P1：服务不可用，1 分钟即报
+      - alert: ServiceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: P1
+        annotations:
+          summary: "服务 {{ $labels.job }} 不可用"
+          description: "{{ $labels.instance }} 已持续 1 分钟无法抓取，请立即确认容器状态并查看日志。"
+
+      # P2：主机可用内存低于 15%，持续 5 分钟
+      - alert: HostMemoryLow
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.15
+        for: 5m
+        labels:
+          severity: P2
+        annotations:
+          summary: "主机可用内存低于 15%"
+          description: "当前可用比例 {{ $value | humanizePercentage }}。优先怀疑大模型加载占用，检查 ollama 进程。"
+
+      # P2：根分区可用空间低于 20%
+      - alert: DiskWillFull
+        expr: node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"} < 0.2
+        for: 5m
+        labels:
+          severity: P2
+        annotations:
+          summary: "磁盘可用空间低于 20%"
+          description: "挂载点 {{ $labels.mountpoint }} 剩余 {{ $value | humanizePercentage }}，检查容器日志与镜像层。"
+
+      # P2：容器频繁重启（15 分钟内超过 3 次）
+      - alert: ContainerRestarting
+        expr: increase(container_start_time_seconds[15m]) > 0 or changes(container_start_time_seconds[15m]) > 2
+        for: 5m
+        labels:
+          severity: P2
+        annotations:
+          summary: "容器 {{ $labels.name }} 反复重启"
+          description: "15 分钟内多次启动，检查 podman/docker logs 与退出码，重点看 OOMKilled。"
+
+      # P3：接口 P95 变慢
+      - alert: RAGHighLatency
+        expr: histogram_quantile(0.95, sum(rate(rag_query_latency_seconds_bucket[5m])) by (le)) > 8
+        for: 5m
+        labels:
+          severity: P3
+        annotations:
+          summary: "问答接口 P95 超过 8 秒"
+          description: "当前 P95 = {{ $value }}s。排查顺序：显存是否打满 → 模型是否被换小 → 向量检索是否走索引。"
+
+      # P3：查询失败率上升
+      - alert: RAGErrorRate
+        expr: sum(rate(rag_query_total{status="error"}[5m])) / sum(rate(rag_query_total[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: P3
+        annotations:
+          summary: "问答接口错误率超过 10%"
+          description: "当前错误率 {{ $value | humanizePercentage }}，检查 Ollama 连通性与数据库连接池。"
