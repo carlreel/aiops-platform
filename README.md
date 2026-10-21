@@ -220,9 +220,30 @@ make test        # 4 项冒烟测试
 
 完整测试数据见 [`docs/检索测试记录.md`](docs/检索测试记录.md)。
 
-### 3. 监控大盘
+### 3. 监控大盘（Grafana · Node Exporter Full）
 
-> 待补充：Prometheus + Grafana 面板截图（主机资源、容器资源、RAG 业务指标三块）
+主机 CPU / 内存 / 磁盘 / 网络，时间范围 15 分钟：
+
+![Grafana 主机大盘](docs/img/grafana-host.png)
+
+### 4. 采集目标全部健康
+
+Prometheus `/targets` 三个抓取目标全部 UP：
+
+| job | endpoint | state |
+|---|---|---|
+| prometheus | `http://localhost:9090/metrics` | UP |
+| node | `http://node-exporter:9100/metrics` | UP |
+| rag-api | `http://rag-api:8000/metrics` | UP |
+
+![Prometheus targets](docs/img/prometheus-targets.png)
+
+> **为什么这张比曲线更有说服力**：它证明采集链路是通的。
+> 刚部署的 Prometheus 时间轴上必然是空的（时序库只存启动之后的数据），
+> 所以验收监控要看 `/targets` 是否全 UP、指标数值是否合理，而不是看曲线画不画满。
+>
+> `cadvisor` 未接入：镜像在 `gcr.io`，国内不可达且 `registry-mirrors` 不覆盖 gcr.io。
+> 已在 compose 中用 `profiles: ["monitor-full"]` 标记为可选，不影响主机与业务监控。
 
 ---
 
