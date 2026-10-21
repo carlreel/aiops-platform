@@ -8,36 +8,53 @@
 
 ## 架构
 
-```
-                    ┌──────────────────────────────────────────┐
-   Windows 宿主      │  Ollama  :11434   （GPU 推理，8GB 显存）  │
-                    │  ├─ qwen3:4b      生成                  │
-                    │  └─ bge-m3        向量化（1024 维）      │
-                    └────────────────▲─────────────────────────┘
-                                     │ HTTP
-┌────────────────────────────────────┴─────────────────────────┐
-│  Docker 网络 aiops-platform_default                          │
-│                                                              │
-│  ┌──────────┐   ┌──────────────┐   ┌───────────┐             │
-│  │ rag-api  │──▶│  pgvector    │   │ Grafana   │             │
-│  │ :8000    │   │  :5432       │◀──│ :3000     │             │
-│  │ FastAPI  │   │  向量+业务库  │   └─────▲─────┘             │
-│  └────┬─────┘   └──────────────┘         │                   │
-│       │ /metrics                        │ 查询              │
-│       ▼                                 │                   │
-│  ┌─────────────────────────┐      ┌─────┴──────┐            │
-│  │ Prometheus  :9090       │─────▶│ 告警规则    │            │
-│  └────▲──────────▲─────────┘      └────────────┘            │
-│       │          │                                           │
-│  ┌────┴────┐ ┌───┴────────┐                                  │
-│  │ node-   │ │ cAdvisor   │                                  │
-│  │exporter │ │            │                                  │
-│  └─────────┘ └────────────┘                                  │
-└──────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph HOST["Windows 宿主 · GPU 推理层"]
+        GPU["RTX 5060 Laptop / 8GB 显存"]
+        OLLAMA["Ollama :11434<br/>qwen2.5:3b 生成<br/>bge-m3 向量化 1024 维"]
+        GPU --- OLLAMA
+    end
+
+    subgraph WSL["WSL2 Ubuntu 24.04 · Docker Compose"]
+        API["rag-api :8000<br/>FastAPI 检索问答"]
+        PG["pgvector :5432<br/>向量 + 业务库"]
+        PROM["Prometheus :9090<br/>指标采集 / 告警"]
+        GRAF["Grafana :3000<br/>监控大盘"]
+        NE["node-exporter :9100<br/>主机指标"]
+        CAD["cadvisor :8080<br/>容器指标"]
+        API --> PG
+        PROM --> API
+        PROM --> NE
+        PROM --> CAD
+        PROM --> GRAF
+    end
+
+    CLIENT["运维人员 / 浏览器"] --> API
+    CLIENT --> GRAF
+    API --> OLLAMA
 ```
 
-**检索链路**：文档 → 清洗 → 定长切片（512/64） → bge-m3 向量化 → pgvector(HNSW) 向量召回 20 条
-＋ pg_trgm 关键词召回 20 条 → RRF 融合取 top5 → 拼引用提示词 → qwen3:4b 生成 → 返回答案与出处。
+**检索链路**
+
+```mermaid
+flowchart LR
+    A["文档"] --> B["清洗去噪"]
+    B --> C["切片 chunk 512 / overlap 64"]
+    C --> D["bge-m3 向量化 1024 维"]
+    D --> E["pgvector HNSW 索引"]
+    Q["用户提问"] --> F["混合召回"]
+    E --> F
+    F --> G["向量 20 条 + 关键词 20 条<br/>RRF 融合取 top5"]
+    G --> H["拼接引用提示词"]
+    H --> I["qwen2.5:3b 生成<br/>temperature 0.2"]
+    I --> J["答案 + 出处引用"]
+    G --> K["无有效召回则拒答"]
+```
+
+> **为什么用 RRF 而不直接比分数**：向量相似度和关键词得分不在同一量纲，无法直接相加或比较。
+> RRF 只用排名（`Σ 1/(k+rank)`，k 取 60），天然规避归一化问题，也不需要给两路召回调权重。
+
 
 ---
 
@@ -184,10 +201,28 @@ make test        # 4 项冒烟测试
 
 ---
 
-## 监控大盘
+## 效果截图
 
-![Grafana 主机与容器](docs/img/grafana-host.png)
-![Grafana 业务指标](docs/img/grafana-api.png)
+### 1. 问答返回（含引用出处）
+
+`POST /query` 返回答案与 3 条来源，每条带 `doc_id`、相关度分数、原文片段：
+
+![问答返回](docs/img/query-response.png)
+
+### 2. 检索质量验证
+
+| 用例类型 | 问题 | 结果 |
+|---|---|---|
+| 事实型 | 磁盘使用率达到多少需要清理？ | ✅ rank1 命中目标文档（score 0.0328） |
+| **边界型** | 公司今年的营收是多少？ | ✅ 返回「根据现有资料无法回答」 |
+| 流程型 | 离线交付的完整流程是什么？ | ✅ 步骤完整，带 `[1]` 引用 |
+| 专业型 | WSL2 里容器访问宿主机服务为什么会失败？ | ✅ 准确指出 host-gateway 解析错误与 refused/timeout 区别 |
+
+完整测试数据见 [`docs/检索测试记录.md`](docs/检索测试记录.md)。
+
+### 3. 监控大盘
+
+> 待补充：Prometheus + Grafana 面板截图（主机资源、容器资源、RAG 业务指标三块）
 
 ---
 
@@ -200,8 +235,10 @@ make test        # 4 项冒烟测试
 | 磁盘写满 | pgvector 写入失败，接口 500 | 清理镜像与日志，配置 `max-size` 轮转 |
 | 断外网 | 无法拉镜像、无法下模型 | 离线交付包 `docker load` + 本地 GGUF |
 | 误删数据 | 检索返回空 | `pg_restore` 回滚，验证命中恢复 |
+| **模型静默返回空答案** | HTTP 200，但 `response` 为空字符串 | 排查 `done_reason` 是否为 `length`，检查模型模板是否硬编码思考标签 |
+| **WSL2 容器连不上宿主机** | `Connection refused`（非 timeout） | 查容器 `/etc/hosts` 的 `host.docker.internal` 是否指向 `172.17.0.1`，改用真实网关 IP |
 
-详见 `docs/故障演练记录.md`
+详见 [`docs/故障演练记录.md`](docs/故障演练记录.md) 与 [`docs/部署实录-2026-10-20.md`](docs/部署实录-2026-10-20.md)。
 
 ---
 
